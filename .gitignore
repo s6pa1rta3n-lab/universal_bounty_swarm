@@ -3,3 +3,4 @@ __pycache__/
 *.class
 .pytest_cache/
 .env
+logs/
