@@ -1,9 +1,9 @@
 import { defineConfig } from "vite";
 
 export default defineConfig({
-  base: "/console/",
+  base: "/universal_bounty_swarm/",
   build: {
-    outDir: "../app/static/console",
+    outDir: "dist",
     emptyOutDir: true,
     assetsDir: "assets",
   },
