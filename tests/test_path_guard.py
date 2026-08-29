@@ -108,7 +108,9 @@ class TestPathGuardBypasses:
         guard = PathGuard()
         user_home = str(Path.home())
         # Traverse via parent
-        assert guard.is_protected(f"{user_home}/Desktop/../../teamwork_projects/odin") is True
+        assert guard.is_protected(f"{user_home}/Desktop/../teamwork_projects/odin") is True
+        assert guard.is_protected(f"{user_home}/Desktop/sub/../../teamwork_projects/odin") is True
+        assert guard.is_protected("/tmp/../../Users/solveetcoagula/teamwork_projects/odin") is True
         assert (
             guard.is_protected("~/teamwork_projects/keeper_daemon/../odin/file.txt")
             is True
