@@ -527,7 +527,7 @@ class IntakeSidecar:
             logger.debug(f"Discarding unqualified issue {repo_name}#{issue_number}: {reason}")
             return None
 
-        status = "priority_triage" if is_high_priority else "pending_triage"
+        status = "queued"
         priority = "high" if is_high_priority else "standard"
 
         author_field = issue_node.get("author") or {}
@@ -571,6 +571,45 @@ class IntakeSidecar:
         }
 
         return lead_doc
+
+    def balance_queue(self, max_concurrent: int = 4) -> None:
+        """
+        Load balances the queue by trickling 'queued' leads into 'pending_triage'
+        only when active capacity is below max_concurrent.
+        """
+        col_ref = self.db.collection(self.collection_name)
+        
+        # Count active leads
+        active_statuses = ["priority_triage", "pending_triage", "claimed", "running_orbstack"]
+        active_count = 0
+        for status in active_statuses:
+            docs = list(col_ref.where("status", "==", status).stream())
+            active_count += len(docs)
+            
+        logger.info(f"[LoadBalancer] Current active leads: {active_count}/{max_concurrent}")
+        
+        if active_count >= max_concurrent:
+            logger.info("[LoadBalancer] Swarm is at capacity. Holding queue.")
+            return
+            
+        slots_available = max_concurrent - active_count
+        logger.info(f"[LoadBalancer] Swarm has {slots_available} slots open. Promoting from queued...")
+        
+        queued_docs = list(col_ref.where("status", "==", "queued").limit(slots_available).stream())
+        
+        promoted = 0
+        for doc in queued_docs:
+            try:
+                doc.reference.update({
+                    "status": "pending_triage",
+                    "updated_at_iso": datetime.now(timezone.utc).isoformat()
+                })
+                promoted += 1
+                logger.info(f"[+] Promoted {doc.id} to pending_triage.")
+            except Exception as e:
+                logger.error(f"Error promoting doc {doc.id}: {e}")
+                
+        logger.info(f"[LoadBalancer] Successfully promoted {promoted} leads.")
 
     def ingest_bounties(
         self,
@@ -627,6 +666,13 @@ class IntakeSidecar:
         logger.info("Starting single intake sweep...")
         leads = self.ingest_bounties()
         logger.info(f"Intake sweep completed. Ingested {len(leads)} new leads.")
+        
+        # Load Balance Queue
+        try:
+            self.balance_queue()
+        except Exception as e:
+            logger.error(f"Error during load balancing: {e}")
+            
         return leads
 
     def run(self, interval_sec: int = 300, stop_event: Optional[Any] = None) -> None:
