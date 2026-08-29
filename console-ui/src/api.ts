@@ -51,10 +51,13 @@ export type Health = {
   status?: string;
 };
 
+const API_BASE = "https://bounty-swarm-gateway-113376683730.us-central1.run.app";
+
 export async function fetchJson<T>(path: string): Promise<T> {
-  const resp = await fetch(path);
+  const url = path.startsWith("http") ? path : `${API_BASE}${path}`;
+  const resp = await fetch(url);
   if (!resp.ok) {
-    throw new Error(`${path} ${resp.status}`);
+    throw new Error(`${url} ${resp.status}`);
   }
   return resp.json() as Promise<T>;
 }
