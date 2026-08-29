@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Union
 
 import pytest
+from google.api_core import exceptions as google_exceptions
 
 # Ensure universal_bounty_swarm root and src are on sys.path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -113,40 +114,49 @@ try:
     from src.core.safe_io import SafeIO
 except ImportError:
     class SafeIO:
-        def __init__(self, path_guard: Optional[PathGuard] = None):
-            self.path_guard = path_guard or PathGuard()
+        _guard = PathGuard()
 
-        def read_text(self, path: Union[str, Path], encoding: str = "utf-8") -> str:
-            val = self.path_guard.validate_access(path, operation="read_text")
+        @classmethod
+        def set_guard(cls, guard):
+            cls._guard = guard
+
+        @classmethod
+        def read_text(cls, path: Union[str, Path], encoding: str = "utf-8") -> str:
+            val = cls._guard.validate_access(path, operation="read_text")
             with open(val, "r", encoding=encoding) as f:
                 return f.read()
 
-        def write_text(self, path: Union[str, Path], data: str, encoding: str = "utf-8") -> int:
-            val = self.path_guard.validate_access(path, operation="write_text")
+        @classmethod
+        def write_text(cls, path: Union[str, Path], data: str, encoding: str = "utf-8") -> int:
+            val = cls._guard.validate_access(path, operation="write_text")
             val.parent.mkdir(parents=True, exist_ok=True)
             with open(val, "w", encoding=encoding) as f:
                 return f.write(data)
 
-        def read_bytes(self, path: Union[str, Path]) -> bytes:
-            val = self.path_guard.validate_access(path, operation="read_bytes")
+        @classmethod
+        def read_bytes(cls, path: Union[str, Path]) -> bytes:
+            val = cls._guard.validate_access(path, operation="read_bytes")
             with open(val, "rb") as f:
                 return f.read()
 
-        def write_bytes(self, path: Union[str, Path], data: bytes) -> int:
-            val = self.path_guard.validate_access(path, operation="write_bytes")
+        @classmethod
+        def write_bytes(cls, path: Union[str, Path], data: bytes) -> int:
+            val = cls._guard.validate_access(path, operation="write_bytes")
             val.parent.mkdir(parents=True, exist_ok=True)
             with open(val, "wb") as f:
                 return f.write(data)
 
-        def delete_file(self, path: Union[str, Path], missing_ok: bool = True) -> None:
-            val = self.path_guard.validate_access(path, operation="delete_file")
+        @classmethod
+        def delete_file(cls, path: Union[str, Path], missing_ok: bool = True) -> None:
+            val = cls._guard.validate_access(path, operation="delete_file")
             if val.exists():
                 val.unlink()
             elif not missing_ok:
                 raise FileNotFoundError(f"File not found: {val}")
 
-        def rmtree(self, path: Union[str, Path], ignore_errors: bool = False) -> None:
-            val = self.path_guard.validate_access(path, operation="rmtree")
+        @classmethod
+        def rmtree(cls, path: Union[str, Path], ignore_errors: bool = False) -> None:
+            val = cls._guard.validate_access(path, operation="rmtree")
             if val.exists():
                 shutil.rmtree(val, ignore_errors=ignore_errors)
 
@@ -240,6 +250,7 @@ class MockDocumentReference:
             else:
                 new_data = dict(document_data)
             self._collection._docs[self.id] = new_data
+            self._db._version_counter[self.path] = self._db._version_counter.get(self.path, 0) + 1
             self._collection._notify_listeners(self.id, new_data, "MODIFIED" if old_data else "ADDED")
         return MockWriteResult()
 
@@ -260,6 +271,7 @@ class MockDocumentReference:
                 else:
                     curr[k] = v
             self._collection._docs[self.id] = curr
+            self._db._version_counter[self.path] = self._db._version_counter.get(self.path, 0) + 1
             self._collection._notify_listeners(self.id, curr, "MODIFIED")
         return MockWriteResult()
 
@@ -267,6 +279,7 @@ class MockDocumentReference:
         with self._db._lock:
             if self.id in self._collection._docs:
                 del self._collection._docs[self.id]
+                self._db._version_counter[self.path] = self._db._version_counter.get(self.path, 0) + 1
                 self._collection._notify_listeners(self.id, None, "REMOVED")
         return MockWriteResult()
 
@@ -366,7 +379,6 @@ class MockCollectionReference:
         return self._db._add_collection_watch(self, callback)
 
     def _notify_listeners(self, doc_id: str, data: Optional[Dict[str, Any]], change_type: str):
-        # Trigger all registered collection watchers asynchronously
         snapshots = self.get()
         changes = [MockDocumentChange(doc_id, data, change_type)]
         read_time = time.time()
@@ -380,14 +392,14 @@ class MockCollectionReference:
     def _safe_dispatch(self, listener, snapshots, changes, read_time):
         try:
             listener(snapshots, changes, read_time)
-        except Exception as e:
+        except Exception:
             pass
 
 
 class MockDocumentChange:
     def __init__(self, doc_id: str, data: Optional[Dict[str, Any]], change_type: str):
         self.doc = MockDocumentSnapshot(doc_id, data, exists=(data is not None))
-        self.type = change_type  # 'ADDED', 'MODIFIED', 'REMOVED'
+        self.type = change_type
         self.old_index = -1
         self.new_index = 0
 
@@ -398,10 +410,28 @@ class MockWriteResult:
 
 
 class MockTransaction:
-    def __init__(self, db: 'MockFirestoreClient'):
+    """ACID Transaction implementation fully compatible with google.cloud.firestore.Transaction."""
+    def __init__(self, db: 'MockFirestoreClient', max_attempts: int = 5, read_only: bool = False):
         self._db = db
+        self._max_attempts = max_attempts
+        self._read_only = read_only
+        self._id = uuid.uuid4().hex.encode('utf-8')
+        self._in_progress = True
         self._read_versions: Dict[str, int] = {}
         self._writes: List[Callable[[], None]] = []
+
+    def _clean_up(self):
+        self._read_versions.clear()
+        self._writes.clear()
+        self._in_progress = False
+
+    def _begin(self, retry_id: Optional[bytes] = None):
+        self._clean_up()
+        self._id = retry_id or uuid.uuid4().hex.encode('utf-8')
+        self._in_progress = True
+
+    def _rollback(self):
+        self._clean_up()
 
     def get(self, doc_or_query: Any) -> Any:
         if isinstance(doc_or_query, MockDocumentReference):
@@ -438,12 +468,11 @@ class MockTransaction:
             for path, read_ver in self._read_versions.items():
                 curr_ver = self._db._version_counter.get(path, 0)
                 if curr_ver != read_ver:
-                    raise Exception(f"Transaction conflict on {path}: read v{read_ver}, currently v{curr_ver}")
+                    raise google_exceptions.Aborted(f"Transaction conflict on {path}: read v{read_ver}, currently v{curr_ver}")
             # Execute all writes
             for w in self._writes:
                 w()
-            for path in self._read_versions:
-                self._db._version_counter[path] = self._db._version_counter.get(path, 0) + 1
+            self._clean_up()
 
 
 class MockFirestoreClient:
@@ -461,18 +490,22 @@ class MockFirestoreClient:
                 self._collections[collection_name] = MockCollectionReference(collection_name, self)
             return self._collections[collection_name]
 
-    def transaction(self) -> MockTransaction:
-        return MockTransaction(self)
+    def transaction(self, max_attempts: int = 5, read_only: bool = False, **kwargs) -> MockTransaction:
+        return MockTransaction(self, max_attempts=max_attempts, read_only=read_only)
 
     def _add_collection_watch(self, col: MockCollectionReference, callback: Callable) -> MockWatch:
         with self._lock:
             col._listeners.append(callback)
-            # Deliver initial snapshot
             initial_snaps = col.get()
             initial_changes = [MockDocumentChange(s.id, s.to_dict(), "ADDED") for s in initial_snaps]
+            def _initial_dispatch():
+                try:
+                    callback(initial_snaps, initial_changes, time.time())
+                except Exception:
+                    pass
+
             threading.Thread(
-                target=callback,
-                args=(initial_snaps, initial_changes, time.time()),
+                target=_initial_dispatch,
                 daemon=True
             ).start()
 
@@ -498,20 +531,6 @@ class MockFirestoreClient:
             return self._add_collection_watch(doc_ref._collection, _listener)
 
 
-def run_in_mock_transaction(db: MockFirestoreClient, fn: Callable[[MockTransaction], Any], max_attempts: int = 5) -> Any:
-    for attempt in range(max_attempts):
-        txn = db.transaction()
-        try:
-            res = fn(txn)
-            txn._commit()
-            return res
-        except Exception as e:
-            if "conflict" in str(e).lower() and attempt < max_attempts - 1:
-                time.sleep(0.01 * (2 ** attempt))
-                continue
-            raise
-
-
 # ==============================================================================
 # PYTEST FIXTURES
 # ==============================================================================
@@ -532,7 +551,6 @@ def tmp_workspace(tmp_path: Path) -> Path:
     ws = tmp_path / f"workspace_{uuid.uuid4().hex[:8]}"
     ws.mkdir(parents=True, exist_ok=True)
     yield ws
-    # Cleanup
     if ws.exists():
         shutil.rmtree(ws, ignore_errors=True)
 
@@ -552,9 +570,10 @@ def custom_path_guard():
 
 
 @pytest.fixture
-def safe_io(path_guard: PathGuard) -> SafeIO:
+def safe_io(path_guard: PathGuard) -> Any:
     """Returns SafeIO configured with standard PathGuard."""
-    return SafeIO(path_guard=path_guard)
+    SafeIO.set_guard(path_guard)
+    return SafeIO
 
 
 @pytest.fixture
