@@ -399,6 +399,7 @@ class MockCollectionReference:
 class MockDocumentChange:
     def __init__(self, doc_id: str, data: Optional[Dict[str, Any]], change_type: str):
         self.doc = MockDocumentSnapshot(doc_id, data, exists=(data is not None))
+        self.document = self.doc
         self.type = change_type
         self.old_index = -1
         self.new_index = 0

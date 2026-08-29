@@ -234,8 +234,10 @@ class FirestoreListener:
 
             events: List[FirestoreEvent] = []
             for change in changes:
-                doc = change.document
-                data = doc.to_dict() if doc.exists else None
+                doc = getattr(change, "document", getattr(change, "doc", None))
+                if doc is None:
+                    continue
+                data = doc.to_dict() if getattr(doc, "exists", False) else None
                 c_type = change.type.name if hasattr(change.type, "name") else str(change.type)
                 latency = self._calculate_latency(data, received_at)
 
