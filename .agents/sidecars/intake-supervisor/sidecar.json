@@ -1,0 +1,11 @@
+{
+  "builtin": "schedule",
+  "restart_policy": "always",
+  "args": [
+    "0 */2 * * *",
+    "agentapi",
+    "new-conversation",
+    "Run `pm2 status intake_sidecar` and review recent GraphQL/GitHub ingestion logs in `universal_bounty_swarm/logs/`. Ensure leads are actively populating Firestore."
+  ],
+  "display_name": "Intake Supervisor (2h)"
+}

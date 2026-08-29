@@ -1,0 +1,11 @@
+{
+  "builtin": "schedule",
+  "restart_policy": "always",
+  "args": [
+    "0 */4 * * *",
+    "agentapi",
+    "new-conversation",
+    "Run `pm2 status executor_sidecar`. Verify that ephemeral OrbStack containers are successfully launching and destroying by checking `universal_bounty_swarm/logs/`."
+  ],
+  "display_name": "Executor Supervisor (4h)"
+}

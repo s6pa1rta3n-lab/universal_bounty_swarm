@@ -1,0 +1,11 @@
+{
+  "builtin": "schedule",
+  "restart_policy": "always",
+  "args": [
+    "0 12 * * *",
+    "agentapi",
+    "new-conversation",
+    "Run `pm2 status sync_sidecar`. Ensure that the local GitHub repository is maintaining continuous version control and PR comments are being pushed."
+  ],
+  "display_name": "Cloud Sync Supervisor (12h)"
+}

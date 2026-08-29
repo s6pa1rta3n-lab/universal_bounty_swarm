@@ -1,0 +1,11 @@
+{
+  "builtin": "schedule",
+  "restart_policy": "always",
+  "args": [
+    "0 */6 * * *",
+    "agentapi",
+    "new-conversation",
+    "Run `pm2 status escort_sidecar`. Audit the transaction state management to ensure bounty claims and lifecycle transitions are mathematically sound."
+  ],
+  "display_name": "Escort Supervisor (6h)"
+}

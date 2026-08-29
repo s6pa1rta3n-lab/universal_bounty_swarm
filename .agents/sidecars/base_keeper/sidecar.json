@@ -1,0 +1,11 @@
+{
+  "builtin": "schedule",
+  "restart_policy": "always",
+  "args": [
+    "0 * * * *",
+    "agentapi",
+    "new-conversation",
+    "Monitor the Web3 Keeper Daemon. Check PM2 status by running npx pm2 jlist and review the last 20 lines of logs with npx pm2 logs base-keeper-daemon --lines 20 --nostream in ~/teamwork_projects/keeper_daemon. If the process has crashed, restart it using npx pm2 restart base-keeper-daemon. If there are critical errors, alert the user.\n\nCRITICAL AUDIT LOGGING DIRECTIVE:\nBefore you terminate your execution, you MUST navigate to ~/Desktop/bounty_operations and execute the following command to log your run to the Google Sheet \"Cron Audit Log\" tab:\n`python3 .agents/scripts/cron_logger.py \"Base Keeper Monitor\" \"[SUCCESS/FAILED]\" \"[WHAT YOU DID (e.g. Verified PM2 process)]\" \"[WHY YOU DID IT (e.g. Scheduled check)]\" \"[ANOMALIES FOUND (e.g. None / Process had crashed)]\"`\nIf the process crashed and you restarted it, you MUST also send an email alert via `python3 .agents/scripts/send_alert.py \"Keeper Daemon Crashed & Restarted\" \"<details>\"`"
+  ],
+  "display_name": "base_keeper"
+}
